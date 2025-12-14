@@ -1,0 +1,23 @@
+{
+  "name": "kakao-skill-server-mileage",
+  "version": "1.0.0",
+  "description": "카카오 챗봇 스킬 서버 - 포인트 조회",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "kakao",
+    "chatbot",
+    "skill-server",
+    "mileage",
+    "points"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "googleapis": "^166.0.0"
+  }
+}
+

@@ -235,7 +235,6 @@ app.post('/kakao', async (req, res) => {
     // 성공 응답
     const msg = [
       `${person.name}님, 본인인증이 완료되었습니다 ✅`,
-      `• 구분: ${person.role}`,
       '',
       '이제 아래 버튼을 눌러 포인트를 확인할 수 있습니다.',
     ].join('\n');
@@ -377,7 +376,6 @@ app.post('/', async (req, res) => {
     // 성공 응답
     const msg = [
       `${person.name}님, 본인인증이 완료되었습니다 ✅`,
-      `• 구분: ${person.role}`,
       '',
       '이제 아래 버튼을 눌러 포인트를 확인할 수 있습니다.',
     ].join('\n');

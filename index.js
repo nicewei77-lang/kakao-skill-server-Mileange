@@ -323,6 +323,84 @@ app.get('/', (req, res) => {
   res.send('Mileage skill server OK');
 });
 
+// 카카오 챗봇 빌더 스킬 테스트용 - 루트 경로 POST 요청 처리
+app.post('/', async (req, res) => {
+  try {
+    console.log('루트 경로 POST 요청 수신:', JSON.stringify(req.body, null, 2));
+    
+    const { action = {}, userRequest = {} } = req.body;
+    const { params = {} } = action;
+    const { user = {} } = userRequest;
+    const kakaoUserId = user.id || null;
+
+    const userName = params.user_name || '';
+    const userPhone4 = params.user_phone4 || '';
+
+    // 테스트 요청인 경우 (파라미터가 없는 경우)
+    if (!userName && !userPhone4) {
+      return res.json(
+        createKakaoResponse('스킬 서버가 정상적으로 작동 중입니다.\n본인인증을 하려면 이름과 전화번호 뒤 4자리를 입력해주세요.')
+      );
+    }
+
+    console.log('인증 요청 - 이름:', userName, '전화 뒤 4자리:', userPhone4);
+
+    // 입력값 검증
+    if (!userName || !userPhone4) {
+      return res.json(
+        createKakaoResponse(
+          '이름과 전화번호 뒤 4자리를 모두 입력해야 본인인증이 가능합니다.\n다시 시도해주세요.'
+        )
+      );
+    }
+
+    // 본인인증 처리
+    const person = await findPersonByNameAndPhone4(userName, userPhone4);
+
+    if (!person) {
+      return res.json(
+        createKakaoResponse(
+          '입력하신 정보와 일치하는 인원을 찾지 못했습니다.\n이름과 전화번호 뒤 4자리를 다시 한 번 확인해주세요.\n(그래도 안 되면 운영진에게 문의해주세요.)'
+        )
+      );
+    }
+
+    // 세션에 인증정보 저장
+    if (kakaoUserId) {
+      lastAuthByUserId.set(kakaoUserId, {
+        name: person.name,
+        role: person.role,
+        phone4: person.phone4,
+      });
+    }
+
+    // 성공 응답
+    const msg = [
+      `${person.name}님, 본인인증이 완료되었습니다 ✅`,
+      `• 구분: ${person.role}`,
+      '',
+      '이제 아래 버튼을 눌러 포인트를 확인할 수 있습니다.',
+    ].join('\n');
+
+    return res.json(
+      createKakaoResponse(msg, [
+        {
+          label: '포인트 조회',
+          action: 'message',
+          messageText: '#포인트_조회',
+        },
+      ])
+    );
+  } catch (err) {
+    console.error('루트 경로 처리 중 오류:', err);
+    return res.json(
+      createKakaoResponse(
+        '스킬 서버 처리 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
+      )
+    );
+  }
+});
+
 // ======================================
 // 10. 서버 시작
 // ======================================

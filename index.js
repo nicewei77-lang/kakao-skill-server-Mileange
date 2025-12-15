@@ -1,6 +1,7 @@
 // index.js
 const express = require('express');
 const { google } = require('googleapis');
+const axios = require('axios');
 
 const app = express();
 app.use(express.json());
@@ -79,6 +80,39 @@ function createKakaoResponse(text, quickReplies = null) {
   }
 
   return response;
+}
+
+/**
+ * 콜백 모드 응답 생성 (즉시 반환용)
+ */
+function createCallbackResponse(data = null) {
+  const response = {
+    version: '2.0',
+    useCallback: true,
+  };
+  
+  if (data) {
+    response.data = data;
+  }
+  
+  return response;
+}
+
+/**
+ * callbackUrl로 최종 응답 전송
+ */
+async function sendCallbackResponse(callbackUrl, text, quickReplies = null) {
+  try {
+    const response = createKakaoResponse(text, quickReplies);
+    await axios.post(callbackUrl, response, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000, // 10초 타임아웃
+    });
+    console.log('콜백 응답 전송 성공:', callbackUrl);
+  } catch (err) {
+    console.error('콜백 응답 전송 실패:', err.message);
+    throw err;
+  }
 }
 
 /**
@@ -197,22 +231,94 @@ app.post('/kakao', async (req, res) => {
     const { params = {} } = action;
     const { user = {} } = userRequest;
     const kakaoUserId = user.id || null;
+    const callbackUrl = userRequest.callbackUrl; // 콜백 URL 확인
 
     const userName = params.user_name || '';
     const userPhone4 = params.user_phone4 || '';
 
     console.log('인증 요청 - 이름:', userName, '전화 뒤 4자리:', userPhone4);
+    console.log('콜백 모드:', callbackUrl ? '활성화' : '비활성화');
 
     // 입력값 검증
     if (!userName || !userPhone4) {
-      return res.json(
-        createKakaoResponse(
-          '이름과 전화번호 뒤 4자리를 모두 입력해야 본인인증이 가능합니다.\n다시 시도해주세요.'
-        )
-      );
+      const errorMsg = '이름과 전화번호 뒤 4자리를 모두 입력해야 본인인증이 가능합니다.\n다시 시도해주세요.';
+      
+      // 콜백 모드면 즉시 응답 후 콜백으로 에러 전송
+      if (callbackUrl) {
+        res.json(createCallbackResponse({
+          text: '처리 중입니다...'
+        }));
+        try {
+          await sendCallbackResponse(callbackUrl, errorMsg);
+        } catch (err) {
+          console.error('콜백 에러 전송 실패:', err);
+        }
+        return;
+      }
+      
+      return res.json(createKakaoResponse(errorMsg));
     }
 
-    // 본인인증 처리
+    // 콜백 모드인 경우 즉시 응답
+    if (callbackUrl) {
+      res.json(createCallbackResponse({
+        text: '본인인증 처리 중입니다...\n잠시만 기다려주세요.'
+      }));
+      
+      // 백그라운드에서 실제 처리
+      (async () => {
+        try {
+          // 본인인증 처리
+          const person = await findPersonByNameAndPhone4(userName, userPhone4);
+
+          if (!person) {
+            await sendCallbackResponse(
+              callbackUrl,
+              '입력하신 정보와 일치하는 인원을 찾지 못했습니다.\n이름과 전화번호 뒤 4자리를 다시 한 번 확인해주세요.\n(그래도 안 되면 운영진에게 문의해주세요.)'
+            );
+            return;
+          }
+
+          // 세션에 인증정보 저장
+          if (kakaoUserId) {
+            lastAuthByUserId.set(kakaoUserId, {
+              name: person.name,
+              role: person.role,
+              phone4: person.phone4,
+            });
+          }
+
+          // 성공 응답
+          const msg = [
+            `${person.name}님, 본인인증이 완료되었습니다 ✅`,
+            '',
+            '이제 아래 버튼을 눌러 포인트를 확인할 수 있습니다.',
+          ].join('\n');
+
+          await sendCallbackResponse(callbackUrl, msg, [
+            {
+              label: '포인트 조회',
+              action: 'message',
+              messageText: '#포인트_조회',
+            },
+          ]);
+        } catch (err) {
+          console.error('콜백 처리 중 오류:', err);
+          try {
+            await sendCallbackResponse(
+              callbackUrl,
+              '본인인증 처리 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
+            );
+          } catch (callbackErr) {
+            console.error('콜백 에러 전송 실패:', callbackErr);
+          }
+        }
+      })();
+      
+      return;
+    }
+
+    // 일반 모드 (기존 로직)
     const person = await findPersonByNameAndPhone4(userName, userPhone4);
 
     if (!person) {
@@ -250,6 +356,24 @@ app.post('/kakao', async (req, res) => {
     );
   } catch (err) {
     console.error('본인인증 처리 중 오류:', err);
+    
+    // 콜백 모드면 에러도 콜백으로 전송
+    const callbackUrl = req.body?.userRequest?.callbackUrl;
+    if (callbackUrl) {
+      res.json(createCallbackResponse({
+        text: '처리 중입니다...'
+      }));
+      try {
+        await sendCallbackResponse(
+          callbackUrl,
+          '본인인증 처리 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
+        );
+      } catch (callbackErr) {
+        console.error('콜백 에러 전송 실패:', callbackErr);
+      }
+      return;
+    }
+    
     return res.json(
       createKakaoResponse(
         '본인인증 처리 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
@@ -267,25 +391,94 @@ app.post('/points', async (req, res) => {
     const { userRequest = {} } = req.body;
     const { user = {} } = userRequest;
     const kakaoUserId = user.id || null;
+    const callbackUrl = userRequest.callbackUrl; // 콜백 URL 확인
+
+    console.log('포인트 조회 요청 - 콜백 모드:', callbackUrl ? '활성화' : '비활성화');
 
     // 사용자 정보 확인
     if (!kakaoUserId) {
-      return res.json(
-        createKakaoResponse('사용자 정보를 확인할 수 없습니다.\n다시 시도해 주세요.')
-      );
+      const errorMsg = '사용자 정보를 확인할 수 없습니다.\n다시 시도해 주세요.';
+      
+      if (callbackUrl) {
+        res.json(createCallbackResponse({
+          text: '처리 중입니다...'
+        }));
+        try {
+          await sendCallbackResponse(callbackUrl, errorMsg);
+        } catch (err) {
+          console.error('콜백 에러 전송 실패:', err);
+        }
+        return;
+      }
+      
+      return res.json(createKakaoResponse(errorMsg));
     }
 
     // 본인인증 세션 확인
     const session = lastAuthByUserId.get(kakaoUserId);
     if (!session || !session.name) {
-      return res.json(
-        createKakaoResponse(
-          '먼저 본인인증이 필요합니다.\n포인트 조회 메뉴에서 [본인확인]을 다시 진행해 주세요.'
-        )
-      );
+      const errorMsg = '먼저 본인인증이 필요합니다.\n포인트 조회 메뉴에서 [본인확인]을 다시 진행해 주세요.';
+      
+      if (callbackUrl) {
+        res.json(createCallbackResponse({
+          text: '처리 중입니다...'
+        }));
+        try {
+          await sendCallbackResponse(callbackUrl, errorMsg);
+        } catch (err) {
+          console.error('콜백 에러 전송 실패:', err);
+        }
+        return;
+      }
+      
+      return res.json(createKakaoResponse(errorMsg));
     }
 
-    // 포인트 정보 조회
+    // 콜백 모드인 경우 즉시 응답
+    if (callbackUrl) {
+      res.json(createCallbackResponse({
+        text: '포인트 조회 중입니다...\n잠시만 기다려주세요.'
+      }));
+      
+      // 백그라운드에서 실제 처리
+      (async () => {
+        try {
+          // 포인트 정보 조회
+          const pointsData = await findPointsByName(session.name);
+
+          if (!pointsData || pointsData.points === null) {
+            await sendCallbackResponse(
+              callbackUrl,
+              `${session.name}님의 포인트 정보를 찾지 못했습니다.\n운영진에게 포인트 등록 여부를 확인해 주세요.`
+            );
+            return;
+          }
+
+          // 성공 응답
+          const msg = [
+            `${session.name}님의 마일리지 현황입니다.`,
+            '',
+            `현재 마일리지: ${pointsData.points.toLocaleString()}점`,
+          ].join('\n');
+
+          await sendCallbackResponse(callbackUrl, msg);
+        } catch (err) {
+          console.error('콜백 처리 중 오류:', err);
+          try {
+            await sendCallbackResponse(
+              callbackUrl,
+              '포인트 조회 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
+            );
+          } catch (callbackErr) {
+            console.error('콜백 에러 전송 실패:', callbackErr);
+          }
+        }
+      })();
+      
+      return;
+    }
+
+    // 일반 모드 (기존 로직)
     const pointsData = await findPointsByName(session.name);
 
     if (!pointsData || pointsData.points === null) {
@@ -306,6 +499,24 @@ app.post('/points', async (req, res) => {
     return res.json(createKakaoResponse(msg));
   } catch (err) {
     console.error('포인트 조회 중 오류:', err);
+    
+    // 콜백 모드면 에러도 콜백으로 전송
+    const callbackUrl = req.body?.userRequest?.callbackUrl;
+    if (callbackUrl) {
+      res.json(createCallbackResponse({
+        text: '처리 중입니다...'
+      }));
+      try {
+        await sendCallbackResponse(
+          callbackUrl,
+          '포인트 조회 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
+        );
+      } catch (callbackErr) {
+        console.error('콜백 에러 전송 실패:', callbackErr);
+      }
+      return;
+    }
+    
     return res.json(
       createKakaoResponse(
         '포인트 조회 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
@@ -331,29 +542,113 @@ app.post('/', async (req, res) => {
     const { params = {} } = action;
     const { user = {} } = userRequest;
     const kakaoUserId = user.id || null;
+    const callbackUrl = userRequest.callbackUrl; // 콜백 URL 확인
 
     const userName = params.user_name || '';
     const userPhone4 = params.user_phone4 || '';
 
+    console.log('콜백 모드:', callbackUrl ? '활성화' : '비활성화');
+
     // 테스트 요청인 경우 (파라미터가 없는 경우)
     if (!userName && !userPhone4) {
-      return res.json(
-        createKakaoResponse('스킬 서버가 정상적으로 작동 중입니다.\n본인인증을 하려면 이름과 전화번호 뒤 4자리를 입력해주세요.')
-      );
+      const testMsg = '스킬 서버가 정상적으로 작동 중입니다.\n본인인증을 하려면 이름과 전화번호 뒤 4자리를 입력해주세요.';
+      
+      if (callbackUrl) {
+        res.json(createCallbackResponse({
+          text: '처리 중입니다...'
+        }));
+        try {
+          await sendCallbackResponse(callbackUrl, testMsg);
+        } catch (err) {
+          console.error('콜백 에러 전송 실패:', err);
+        }
+        return;
+      }
+      
+      return res.json(createKakaoResponse(testMsg));
     }
 
     console.log('인증 요청 - 이름:', userName, '전화 뒤 4자리:', userPhone4);
 
     // 입력값 검증
     if (!userName || !userPhone4) {
-      return res.json(
-        createKakaoResponse(
-          '이름과 전화번호 뒤 4자리를 모두 입력해야 본인인증이 가능합니다.\n다시 시도해주세요.'
-        )
-      );
+      const errorMsg = '이름과 전화번호 뒤 4자리를 모두 입력해야 본인인증이 가능합니다.\n다시 시도해주세요.';
+      
+      if (callbackUrl) {
+        res.json(createCallbackResponse({
+          text: '처리 중입니다...'
+        }));
+        try {
+          await sendCallbackResponse(callbackUrl, errorMsg);
+        } catch (err) {
+          console.error('콜백 에러 전송 실패:', err);
+        }
+        return;
+      }
+      
+      return res.json(createKakaoResponse(errorMsg));
     }
 
-    // 본인인증 처리
+    // 콜백 모드인 경우 즉시 응답
+    if (callbackUrl) {
+      res.json(createCallbackResponse({
+        text: '본인인증 처리 중입니다...\n잠시만 기다려주세요.'
+      }));
+      
+      // 백그라운드에서 실제 처리
+      (async () => {
+        try {
+          // 본인인증 처리
+          const person = await findPersonByNameAndPhone4(userName, userPhone4);
+
+          if (!person) {
+            await sendCallbackResponse(
+              callbackUrl,
+              '입력하신 정보와 일치하는 인원을 찾지 못했습니다.\n이름과 전화번호 뒤 4자리를 다시 한 번 확인해주세요.\n(그래도 안 되면 운영진에게 문의해주세요.)'
+            );
+            return;
+          }
+
+          // 세션에 인증정보 저장
+          if (kakaoUserId) {
+            lastAuthByUserId.set(kakaoUserId, {
+              name: person.name,
+              role: person.role,
+              phone4: person.phone4,
+            });
+          }
+
+          // 성공 응답
+          const msg = [
+            `${person.name}님, 본인인증이 완료되었습니다 ✅`,
+            '',
+            '이제 아래 버튼을 눌러 포인트를 확인할 수 있습니다.',
+          ].join('\n');
+
+          await sendCallbackResponse(callbackUrl, msg, [
+            {
+              label: '포인트 조회',
+              action: 'message',
+              messageText: '#포인트_조회',
+            },
+          ]);
+        } catch (err) {
+          console.error('콜백 처리 중 오류:', err);
+          try {
+            await sendCallbackResponse(
+              callbackUrl,
+              '본인인증 처리 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
+            );
+          } catch (callbackErr) {
+            console.error('콜백 에러 전송 실패:', callbackErr);
+          }
+        }
+      })();
+      
+      return;
+    }
+
+    // 일반 모드 (기존 로직)
     const person = await findPersonByNameAndPhone4(userName, userPhone4);
 
     if (!person) {
@@ -391,6 +686,24 @@ app.post('/', async (req, res) => {
     );
   } catch (err) {
     console.error('루트 경로 처리 중 오류:', err);
+    
+    // 콜백 모드면 에러도 콜백으로 전송
+    const callbackUrl = req.body?.userRequest?.callbackUrl;
+    if (callbackUrl) {
+      res.json(createCallbackResponse({
+        text: '처리 중입니다...'
+      }));
+      try {
+        await sendCallbackResponse(
+          callbackUrl,
+          '스킬 서버 처리 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'
+        );
+      } catch (callbackErr) {
+        console.error('콜백 에러 전송 실패:', callbackErr);
+      }
+      return;
+    }
+    
     return res.json(
       createKakaoResponse(
         '스킬 서버 처리 중 내부 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.\n(지속되면 운영진에게 문의해주세요.)'

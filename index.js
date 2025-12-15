@@ -7,6 +7,19 @@ const app = express();
 app.use(express.json());
 
 // ======================================
+// 0. 디버깅용 - 모든 POST 요청 로깅
+// ======================================
+app.use((req, res, next) => {
+  if (req.method === 'POST') {
+    console.log('=== POST 요청 수신 ===');
+    console.log('경로:', req.path);
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    console.log('===================');
+  }
+  next();
+});
+
+// ======================================
 // 1. Google Sheets 공통 설정
 // ======================================
 

@@ -24,12 +24,14 @@ app.use((req, res, next) => {
 // ======================================
 
 // ─ 본인인증용 명단 시트 ─
-const AUTH_SPREADSHEET_ID = '1F_pq-dE_oAi_nJRThSjP5-QA-c8mmzJ5hA5mSbJXH60';
-const AUTH_RANGE = "'시트1'!A4:S200";
+const AUTH_SPREADSHEET_ID = process.env.AUTH_SPREADSHEET_ID || '1F_pq-dE_oAi_nJRThSjP5-QA-c8mmzJ5hA5mSbJXH60';
+const AUTH_SHEET_TAB = process.env.AUTH_SHEET_TAB || '시트1';
+const AUTH_RANGE = `'${AUTH_SHEET_TAB}'!A4:S200`;
 
 // ─ 포인트 시트 ─
-const POINTS_SPREADSHEET_ID = '1ujB1ZLjmXZXmkQREINW7YojdoXEYBN7gUlXCVTNUswM';
-const POINTS_RANGE = "'마일링지'!A2:AF200";
+const POINTS_SPREADSHEET_ID = process.env.POINTS_SPREADSHEET_ID || '1ujB1ZLjmXZXmkQREINW7YojdoXEYBN7gUlXCVTNUswM';
+const POINTS_SHEET_TAB = process.env.POINTS_SHEET_TAB || '마일링지';
+const POINTS_RANGE = `'${POINTS_SHEET_TAB}'!A2:AF200`;
 
 // ─ 본인인증용 명단 시트 내 열 인덱스 (0-based, A=0, B=1, C=2, ...) ─
 const COL_STAFF_NAME = 2;    // C열: 스태프 이름
@@ -730,8 +732,12 @@ app.post('/', async (req, res) => {
 // ======================================
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-  console.log('AUTH_RANGE =', AUTH_RANGE);
-  console.log('POINTS_RANGE =', POINTS_RANGE);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+    console.log('AUTH_RANGE =', AUTH_RANGE);
+    console.log('POINTS_RANGE =', POINTS_RANGE);
+  });
+}
+
+module.exports = app;
